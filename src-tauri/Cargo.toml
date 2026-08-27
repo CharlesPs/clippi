@@ -1,0 +1,23 @@
+[package]
+name = "lan-clipboard-sync"
+version = "0.1.0"
+description = "LAN clipboard synchronization MVP"
+authors = ["you"]
+edition = "2021"
+
+[lib]
+name = "lan_clipboard_sync_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+arboard = "3.4"
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "net"] }
+tokio-tungstenite = "0.24"
+url = "2"
