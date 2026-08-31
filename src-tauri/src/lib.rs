@@ -1,7 +1,9 @@
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Emitter, State};
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{TrayIconBuilder, TrayIconEvent};
+use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 use tokio::sync::{mpsc, oneshot};
 
 struct SyncState(Mutex<Vec<oneshot::Sender<()>>>);
@@ -168,5 +170,44 @@ async fn relay_connection(stream: tokio::net::TcpStream, peers: RelayPeers) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-  tauri::Builder::default().manage(SyncState(Mutex::new(Vec::new()))).invoke_handler(tauri::generate_handler![connect, start_relay, disconnect]).run(tauri::generate_context!()).expect("error al ejecutar la aplicación");
+  tauri::Builder::default()
+    .manage(SyncState(Mutex::new(Vec::new())))
+    .invoke_handler(tauri::generate_handler![connect, start_relay, disconnect])
+    .on_window_event(|window, event| {
+      // Oculta la ventana en vez de cerrar el proceso; se maneja desde el tray.
+      if let WindowEvent::CloseRequested { api, .. } = event {
+        window.hide().ok();
+        api.prevent_close();
+      }
+    })
+    .setup(|app| {
+      let show_hide = MenuItem::with_id(app, "show_hide", "Mostrar/Ocultar", true, None::<&str>)?;
+      let quit = MenuItem::with_id(app, "quit", "Salir", true, None::<&str>)?;
+      let menu = Menu::with_items(app, &[&show_hide, &quit])?;
+      TrayIconBuilder::new()
+        .icon(app.default_window_icon().cloned().expect("falta el icono de la app"))
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+          "show_hide" => {
+            if let Some(window) = app.get_webview_window("main") {
+              if window.is_visible().unwrap_or(false) { window.hide().ok(); } else { window.show().ok(); window.set_focus().ok(); }
+            }
+          }
+          "quit" => app.exit(0),
+          _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+          if let TrayIconEvent::Click { button: tauri::tray::MouseButton::Left, button_state: tauri::tray::MouseButtonState::Up, .. } = event {
+            let app = tray.app_handle();
+            if let Some(window) = app.get_webview_window("main") {
+              if window.is_visible().unwrap_or(false) { window.hide().ok(); } else { window.show().ok(); window.set_focus().ok(); }
+            }
+          }
+        })
+        .build(app)?;
+      Ok(())
+    })
+    .run(tauri::generate_context!())
+    .expect("error al ejecutar la aplicación");
 }
