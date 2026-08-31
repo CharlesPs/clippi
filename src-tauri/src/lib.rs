@@ -18,11 +18,18 @@ struct RelayRequest { port: u16, room: String, client_id: String }
 #[serde(rename_all = "camelCase")]
 struct ClipboardMessage { #[serde(rename = "type")] kind: String, room: String, sender_id: String, text: String }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct Status { state: &'static str, detail: String }
+
+#[derive(Clone, Serialize)]
+struct ClipboardUpdate { text: String }
 
 fn status(app: &AppHandle, state: &'static str, detail: impl Into<String>) {
   let _ = app.emit("sync-status", Status { state, detail: detail.into() });
+}
+
+fn clipboard_update(app: &AppHandle, text: String) {
+  let _ = app.emit("clipboard-update", ClipboardUpdate { text });
 }
 
 #[tauri::command]
@@ -95,13 +102,17 @@ async fn sync_loop(app: AppHandle, request: ConnectRequest, mut stop: oneshot::R
       _ = timer.tick() => match clipboard_read().await {
         Ok(text) if last_seen.as_ref() != Some(&text) => {
           let packet = ClipboardMessage { kind: "clipboard".into(), room: request.room.clone(), sender_id: request.client_id.clone(), text: text.clone() };
-          match serde_json::to_string(&packet).ok().map(|value| tokio_tungstenite::tungstenite::Message::Text(value.into())) { Some(message) if writer.send(message).await.is_ok() => { last_seen = Some(text); status(&app, "sent", "Texto enviado al otro dispositivo"); }, _ => { status(&app, "error", "Se perdió la conexión con el relay"); return; } }
+          let sent = match serde_json::to_string(&packet) {
+            Ok(value) => writer.send(tokio_tungstenite::tungstenite::Message::Text(value.into())).await.is_ok(),
+            Err(_) => false,
+          };
+          if sent { last_seen = Some(text.clone()); clipboard_update(&app, text); status(&app, "sent", "Texto enviado al otro dispositivo"); } else { status(&app, "error", "Se perdió la conexión con el relay"); return; }
         }, _ => {}
       },
       incoming = reader.next() => match incoming {
         Some(Ok(message)) if message.is_text() => if let Ok(packet) = serde_json::from_str::<ClipboardMessage>(message.to_text().unwrap_or("")) {
           if packet.kind == "clipboard" && packet.room == request.room && packet.sender_id != request.client_id {
-            if clipboard_write(packet.text.clone()).await.is_ok() { last_seen = Some(packet.text); status(&app, "received", "Texto recibido y escrito en el portapapeles"); }
+            if clipboard_write(packet.text.clone()).await.is_ok() { last_seen = Some(packet.text.clone()); clipboard_update(&app, packet.text); status(&app, "received", "Texto recibido y escrito en el portapapeles"); }
           }
         },
         Some(Ok(_)) => {}, Some(Err(error)) => { status(&app, "error", format!("Conexión cerrada: {error}")); return; }, None => { status(&app, "disconnected", "El relay cerró la conexión"); return; }
@@ -137,7 +148,10 @@ async fn relay_connection(stream: tokio::net::TcpStream, peers: RelayPeers) {
   if let Ok(mut list) = peers.lock() { list.push(tx); }
   loop {
     tokio::select! {
-      outgoing = rx.recv() => match outgoing { Some(message) if writer.send(message).await.is_err() => return, Some(_) => {}, None => return },
+      outgoing = rx.recv() => match outgoing {
+        Some(message) => if writer.send(message).await.is_err() { return; },
+        None => return,
+      },
       incoming = reader.next() => match incoming {
         Some(Ok(message)) if message.is_text() => {
           let text = message.into_text().unwrap_or_default().to_string();

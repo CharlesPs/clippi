@@ -2,9 +2,10 @@ import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import "./styles.css";
+import "./styles.scss";
 
 type Event = { state: "connected" | "disconnected" | "server_started" | "sent" | "received" | "error"; detail: string };
+type ClipboardUpdate = { text: string };
 const defaultEndpoint = "ws://127.0.0.1:8787";
 
 function App() {
@@ -14,6 +15,7 @@ function App() {
   const [port, setPort] = useState(localStorage.getItem("relayPort") ?? "8787");
   const [connected, setConnected] = useState(false);
   const [activity, setActivity] = useState("Aún no conectado");
+  const [clipboardText, setClipboardText] = useState("");
   const clientId = useMemo(() => {
     const old = localStorage.getItem("clientId");
     if (old) return old;
@@ -21,12 +23,13 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const unlisten = listen<Event>("sync-status", ({ payload }) => {
+    const unlistenStatus = listen<Event>("sync-status", ({ payload }) => {
       setActivity(payload.detail);
       if (payload.state === "connected" || payload.state === "server_started") setConnected(true);
       if (payload.state === "disconnected" || payload.state === "error") setConnected(false);
     });
-    return () => { void unlisten.then((fn) => fn()); };
+    const unlistenClipboard = listen<ClipboardUpdate>("clipboard-update", ({ payload }) => setClipboardText(payload.text));
+    return () => { void Promise.all([unlistenStatus, unlistenClipboard]).then((listeners) => listeners.forEach((unlisten) => unlisten())); };
   }, []);
 
   async function connect() {
@@ -55,6 +58,7 @@ function App() {
         <div className="actions"><button onClick={() => void startRelay()} disabled={connected}>Iniciar relay</button><button className="secondary" onClick={() => void disconnect()} disabled={!connected}>Detener</button></div>
       </>}
       <div className="activity">{activity}</div>
+      <section className="clipboard-preview" aria-live="polite"><p>Último texto copiado</p><pre>{clipboardText || "Aún no se ha copiado texto"}</pre></section>
     </section>
   </main>;
 }
