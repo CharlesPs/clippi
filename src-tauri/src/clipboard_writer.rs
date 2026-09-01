@@ -26,6 +26,7 @@ fn write_uris(body: &str) -> bool {
 
 #[cfg(target_os = "macos")]
 fn write_uris(body: &str) -> bool {
+  use objc2::class;
   use objc2::msg_send;
   use objc2::runtime::{AnyClass, AnyObject};
 
@@ -52,7 +53,7 @@ fn write_uris(body: &str) -> bool {
       }
     }
 
-    let _: bool = msg_send![pasteboard, setPropertyList: nsarray forType: urls_type];
+    let _: bool = msg_send![pasteboard, setPropertyList: nsarray, forType: urls_type];
     true
   }
 }

@@ -189,17 +189,45 @@ fn current_download_dir() -> Result<String, String> {
   Ok(default_download_dir().to_string_lossy().into_owned())
 }
 
-async fn clipboard_read() -> Result<String, String> {
-  tokio::task::spawn_blocking(|| {
-    let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
-    clipboard.get_text().map_err(|e| e.to_string())
-  }).await.map_err(|e| e.to_string())?
+async fn clipboard_read(app: &AppHandle) -> Result<String, String> {
+  use std::sync::mpsc;
+  let (tx, rx) = mpsc::sync_channel::<Result<String, String>>(1);
+  let app_clone = app.clone();
+  app.run_on_main_thread(move || {
+    let _ = app_clone;
+    let result = (|| -> Result<String, String> {
+      let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+      clipboard.get_text().map_err(|e| e.to_string())
+    })();
+    let _ = tx.send(result);
+  }).map_err(|e| e.to_string())?;
+  match tokio::task::spawn_blocking(move || {
+    rx.recv_timeout(std::time::Duration::from_millis(1500))
+  }).await {
+    Ok(Ok(value)) => value,
+    Ok(Err(_)) => Err("Canal cerrado".into()),
+    Err(_) => Err("Tiempo de espera agotado".into()),
+  }
 }
-async fn clipboard_write(text: String) -> Result<(), String> {
-  tokio::task::spawn_blocking(move || {
-    let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
-    clipboard.set_text(text).map_err(|e| e.to_string())
-  }).await.map_err(|e| e.to_string())?
+async fn clipboard_write(app: &AppHandle, text: String) -> Result<(), String> {
+  use std::sync::mpsc;
+  let (tx, rx) = mpsc::sync_channel::<Result<(), String>>(1);
+  let app_clone = app.clone();
+  app.run_on_main_thread(move || {
+    let _ = app_clone;
+    let result = (|| -> Result<(), String> {
+      let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+      clipboard.set_text(text).map_err(|e| e.to_string())
+    })();
+    let _ = tx.send(result);
+  }).map_err(|e| e.to_string())?;
+  match tokio::task::spawn_blocking(move || {
+    rx.recv_timeout(std::time::Duration::from_millis(1500))
+  }).await {
+    Ok(Ok(value)) => value,
+    Ok(Err(_)) => Err("Canal cerrado".into()),
+    Err(_) => Err("Tiempo de espera agotado".into()),
+  }
 }
 
 async fn sync_loop(app: AppHandle, request: ConnectRequest, mut stop: oneshot::Receiver<()>, mut commands: mpsc::UnboundedReceiver<SyncCommand>) {
@@ -217,8 +245,8 @@ async fn sync_loop(app: AppHandle, request: ConnectRequest, mut stop: oneshot::R
       _ = &mut stop => { let _ = writer.send(tokio_tungstenite::tungstenite::Message::Close(None)).await; abort_all_receives(&app); return; }
       _ = timer.tick() => {
         let (files, text_result) = tokio::join!(
-          clipboard_files::read_clipboard_files(),
-          clipboard_read()
+          clipboard_files::read_clipboard_files(app.clone()),
+          clipboard_read(&app)
         );
         if !files.is_empty() {
           last_seen = None;
@@ -272,7 +300,7 @@ async fn sync_loop(app: AppHandle, request: ConnectRequest, mut stop: oneshot::R
           if packet.kind == "join" && packet.room == request.room && packet.sender_id != request.client_id {
             peer_features.insert(packet.sender_id.clone(), (packet.room.clone(), packet.features.clone()));
           } else if packet.kind == "clipboard" && packet.room == request.room && packet.sender_id != request.client_id {
-            if clipboard_write(packet.text.clone()).await.is_ok() { last_seen = Some(packet.text.clone()); clipboard_update(&app, packet.text); status(&app, "received", "Texto recibido y escrito en el portapapeles"); }
+            if clipboard_write(&app, packet.text.clone()).await.is_ok() { last_seen = Some(packet.text.clone()); clipboard_update(&app, packet.text); status(&app, "received", "Texto recibido y escrito en el portapapeles"); }
           } else if packet.kind == "file_start" && packet.room == request.room && packet.sender_id != request.client_id {
             handle_file_start(&app, &packet.text);
           } else if packet.kind == "file_done" && packet.room == request.room && packet.sender_id != request.client_id {
@@ -410,6 +438,14 @@ fn handle_chunk(app: &AppHandle, id: &str, offset: u64, data: Vec<u8>) {
 }
 
 fn handle_file_done(app: &AppHandle, id: &str) {
+  let app_clone = app.clone();
+  let id_owned = id.to_string();
+  tokio::spawn(async move {
+    handle_file_done_async(&app_clone, &id_owned).await;
+  });
+}
+
+async fn handle_file_done_async(app: &AppHandle, id: &str) {
   let removed: Option<ReceiveTransfer> = {
     let state: State<ReceiveState> = app.state();
     let Ok(mut active) = state.0.lock() else { return };
@@ -428,7 +464,21 @@ fn handle_file_done(app: &AppHandle, id: &str) {
   }
   let final_path = transfer.path.to_string_lossy().into_owned();
   let names = vec![final_path.clone()];
-  if clipboard_writer::write_clipboard_uris(&names) {
+  let wrote = {
+    use std::sync::mpsc;
+    let (tx, rx) = mpsc::sync_channel::<bool>(1);
+    let names_for_main = names.clone();
+    let _ = app.run_on_main_thread(move || {
+      let _ = tx.send(clipboard_writer::write_clipboard_uris(&names_for_main));
+    });
+    match tokio::task::spawn_blocking(move || {
+      rx.recv_timeout(std::time::Duration::from_millis(1500)).unwrap_or(false)
+    }).await {
+      Ok(value) => value,
+      Err(_) => false,
+    }
+  };
+  if wrote {
     let state: State<SelfWrittenClipboard> = app.state();
     if let Ok(mut recent) = state.0.lock() {
       recent.insert(final_path.clone(), std::time::Instant::now());

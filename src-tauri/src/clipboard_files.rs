@@ -1,18 +1,18 @@
 use std::path::Path;
 use std::time::Duration;
 
+use tauri::AppHandle;
+
 use crate::ClipboardFile;
 
-pub async fn read_clipboard_files() -> Vec<ClipboardFile> {
-  match tokio::task::spawn_blocking(read_clipboard_files_blocking).await {
+pub async fn read_clipboard_files(app: AppHandle) -> Vec<ClipboardFile> {
+  let paths = read_paths(app).await;
+  match tokio::task::spawn_blocking(move || {
+    paths.into_iter().map(enrich).collect()
+  }).await {
     Ok(value) => value,
     Err(_) => Vec::new(),
   }
-}
-
-fn read_clipboard_files_blocking() -> Vec<ClipboardFile> {
-  let paths = read_paths();
-  paths.into_iter().map(enrich).collect()
 }
 
 fn enrich(path: String) -> ClipboardFile {
@@ -87,21 +87,43 @@ fn guess_mime(path: &str) -> String {
   value.to_string()
 }
 
-#[cfg(target_os = "linux")]
-fn read_paths() -> Vec<String> {
-  let ctx = glib::MainContext::default();
-  let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<String>>(1);
-  ctx.invoke(move || {
-    let display = match gdk::Display::default() { Some(value) => value, None => { let _ = tx.send(Vec::new()); return; } };
-    let clipboard = gtk::Clipboard::for_display(&display, &gdk::SELECTION_CLIPBOARD);
-    let result = clipboard.wait_for_uris().into_iter().map(|s| s.to_string()).collect();
+async fn read_paths(app: AppHandle) -> Vec<String> {
+  use std::sync::mpsc;
+  let (tx, rx) = mpsc::sync_channel::<Vec<String>>(1);
+  let dispatched = app.run_on_main_thread(move || {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+      #[cfg(target_os = "macos")]
+      {
+        objc2::exception::catch(|| read_paths_platform()).unwrap_or_default()
+      }
+      #[cfg(not(target_os = "macos"))]
+      {
+        read_paths_platform()
+      }
+    }))
+    .unwrap_or_default();
     let _ = tx.send(result);
   });
-  rx.recv_timeout(Duration::from_millis(1200)).unwrap_or_default()
+  if dispatched.is_err() {
+    return Vec::new();
+  }
+  match tokio::task::spawn_blocking(move || {
+    rx.recv_timeout(Duration::from_millis(1500)).unwrap_or_default()
+  }).await {
+    Ok(value) => value,
+    Err(_) => Vec::new(),
+  }
+}
+
+#[cfg(target_os = "linux")]
+fn read_paths_platform() -> Vec<String> {
+  let Some(display) = gdk::Display::default() else { return Vec::new() };
+  let clipboard = gtk::Clipboard::for_display(&display, &gdk::SELECTION_CLIPBOARD);
+  clipboard.wait_for_uris().into_iter().map(|s| s.to_string()).collect()
 }
 
 #[cfg(target_os = "macos")]
-fn read_paths() -> Vec<String> {
+fn read_paths_platform() -> Vec<String> {
   use objc2::msg_send;
   use objc2::runtime::{AnyClass, AnyObject};
 
@@ -112,29 +134,65 @@ fn read_paths() -> Vec<String> {
     let pasteboard: *mut AnyObject = msg_send![pasteboard_class, generalPasteboard];
     if pasteboard.is_null() { return Vec::new(); }
 
-    let filenames_key = b"NSFilenamesPboard\0";
-    let filenames_type: *mut AnyObject = msg_send![nsstring_class, stringWithUTF8String: filenames_key.as_ptr()];
-    let mut result: Vec<String> = ns_array_to_string_vec(msg_send![pasteboard, propertyListForType: filenames_type]);
+    // Prefer the modern public.file-url (NSURL items).
+    let url_key = b"public.file-url\0";
+    let url_type: *mut AnyObject = msg_send![nsstring_class, stringWithUTF8String: url_key.as_ptr()];
+    let urls: *mut AnyObject = msg_send![pasteboard, propertyListForType: url_type];
+    let mut result = nsurl_array_to_paths(urls);
 
+    // Fallback to the legacy NSFilenamesPboard (NSString items).
     if result.is_empty() {
-      let url_key = b"public.file-url\0";
-      let url_type: *mut AnyObject = msg_send![nsstring_class, stringWithUTF8String: url_key.as_ptr()];
-      let urls = msg_send![pasteboard, propertyListForType: url_type];
-      if !urls.is_null() {
-        let count: usize = msg_send![urls, count];
-        for index in 0..count {
-          let item: *mut AnyObject = msg_send![urls, objectAtIndex: index];
-          if item.is_null() { continue; }
-          let utf8: *const i8 = msg_send![item, UTF8String];
-          if !utf8.is_null() {
-            let s = std::ffi::CStr::from_ptr(utf8).to_string_lossy().into_owned();
-            if !s.is_empty() { result.push(s); }
-          }
-        }
-      }
+      let filenames_key = b"NSFilenamesPboard\0";
+      let filenames_type: *mut AnyObject = msg_send![nsstring_class, stringWithUTF8String: filenames_key.as_ptr()];
+      result = nsstring_array_to_paths(msg_send![pasteboard, propertyListForType: filenames_type]);
     }
     result
   }
+}
+
+#[cfg(target_os = "macos")]
+unsafe fn nsstring_array_to_paths(array: *mut objc2::runtime::AnyObject) -> Vec<String> {
+  use objc2::msg_send;
+  use objc2::runtime::AnyObject;
+  if array.is_null() { return Vec::new(); }
+  let count: usize = msg_send![array, count];
+  let mut result = Vec::with_capacity(count);
+  for index in 0..count {
+    let item: *mut AnyObject = msg_send![array, objectAtIndex: index];
+    if item.is_null() { continue; }
+    let utf8: *const i8 = msg_send![item, UTF8String];
+    if !utf8.is_null() {
+      let s = std::ffi::CStr::from_ptr(utf8).to_string_lossy().into_owned();
+      if !s.is_empty() { result.push(s); }
+    }
+  }
+  result
+}
+
+#[cfg(target_os = "macos")]
+unsafe fn nsurl_array_to_paths(array: *mut objc2::runtime::AnyObject) -> Vec<String> {
+  use objc2::msg_send;
+  use objc2::runtime::AnyObject;
+  if array.is_null() { return Vec::new(); }
+  let count: usize = msg_send![array, count];
+  let mut result = Vec::with_capacity(count);
+  for index in 0..count {
+    let item: *mut AnyObject = msg_send![array, objectAtIndex: index];
+    if item.is_null() { continue; }
+    // NSURL.path returns NSString*. Use UTF8String to get a C string.
+    let path_nsstr: *mut AnyObject = msg_send![item, path];
+    if path_nsstr.is_null() { continue; }
+    let utf8: *const i8 = msg_send![path_nsstr, UTF8String];
+    if utf8.is_null() { continue; }
+    let s = std::ffi::CStr::from_ptr(utf8).to_string_lossy().into_owned();
+    if !s.is_empty() { result.push(s); }
+  }
+  result
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn read_paths_platform() -> Vec<String> {
+  Vec::new()
 }
 
 #[cfg(target_os = "macos")]
@@ -153,9 +211,4 @@ unsafe fn ns_array_to_string_vec(array: *mut objc2::runtime::AnyObject) -> Vec<S
     if !s.is_empty() { result.push(s); }
   }
   result
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn read_paths() -> Vec<String> {
-  Vec::new()
 }
