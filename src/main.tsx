@@ -2,10 +2,16 @@ import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { TextPanel } from "./texts";
+import { FilesPanel } from "./files";
+import { FileCard, ClipboardFile } from "./file_card";
 import "./styles.scss";
 
 type Event = { state: "connected" | "disconnected" | "server_started" | "sent" | "received" | "error"; detail: string };
 type ClipboardUpdate = { text: string };
+type ClipboardFilesEvent = { files: ClipboardFile[] };
+type ClipboardKind = "text" | "files";
+
 const defaultEndpoint = "ws://127.0.0.1:8787";
 
 function App() {
@@ -16,6 +22,8 @@ function App() {
   const [connected, setConnected] = useState(false);
   const [activity, setActivity] = useState("Aún no conectado");
   const [clipboardText, setClipboardText] = useState("");
+  const [clipboardFiles, setClipboardFiles] = useState<ClipboardFile[]>([]);
+  const [clipboardKind, setClipboardKind] = useState<ClipboardKind>("text");
   const clientId = useMemo(() => {
     const old = localStorage.getItem("clientId");
     if (old) return old;
@@ -23,13 +31,27 @@ function App() {
   }, []);
 
   useEffect(() => {
+    let active = true;
     const unlistenStatus = listen<Event>("sync-status", ({ payload }) => {
+      if (!active) return;
       setActivity(payload.detail);
       if (payload.state === "connected" || payload.state === "server_started") setConnected(true);
       if (payload.state === "disconnected" || payload.state === "error") setConnected(false);
     });
-    const unlistenClipboard = listen<ClipboardUpdate>("clipboard-update", ({ payload }) => setClipboardText(payload.text));
-    return () => { void Promise.all([unlistenStatus, unlistenClipboard]).then((listeners) => listeners.forEach((unlisten) => unlisten())); };
+    const unlistenText = listen<ClipboardUpdate>("clipboard-update", ({ payload }) => {
+      if (!active) return;
+      setClipboardText(payload.text);
+      setClipboardKind("text");
+    });
+    const unlistenFiles = listen<ClipboardFilesEvent>("clipboard-files", ({ payload }) => {
+      if (!active) return;
+      setClipboardFiles(payload.files);
+      setClipboardKind("files");
+    });
+    return () => {
+      active = false;
+      void Promise.all([unlistenStatus, unlistenText, unlistenFiles]).then((listeners) => listeners.forEach((fn) => fn()));
+    };
   }, []);
 
   async function connect() {
@@ -43,7 +65,7 @@ function App() {
   async function disconnect() { await invoke("disconnect"); }
 
   return <main>
-    <section className="card"><p className="eyebrow">MVP · solo texto · red local</p><h1>Clipboard Sync</h1>
+    <section className="card"><p className="eyebrow">MVP · texto y archivos · red local</p><h1>Clipboard Sync</h1>
       <p className={connected ? "status online" : "status"}>{connected ? (role === "server" ? "● Relay activo" : "● Conectado") : "○ Desconectado"}</p>
       <div className="role-picker"><button className={role === "client" ? "selected" : "secondary"} onClick={() => setRole("client")} disabled={connected}>Cliente</button><button className={role === "server" ? "selected" : "secondary"} onClick={() => setRole("server")} disabled={connected}>Servidor</button></div>
       {role === "client" ? <>
@@ -58,7 +80,10 @@ function App() {
         <div className="actions"><button onClick={() => void startRelay()} disabled={connected}>Iniciar relay</button><button className="secondary" onClick={() => void disconnect()} disabled={!connected}>Detener</button></div>
       </>}
       <div className="activity">{activity}</div>
-      <section className="clipboard-preview" aria-live="polite"><p>Último texto copiado</p><pre>{clipboardText || "Aún no se ha copiado texto"}</pre></section>
+      {clipboardKind === "files" && clipboardFiles.length > 0
+        ? <FileCard files={clipboardFiles} />
+        : <TextPanel text={clipboardText} />}
+      <FilesPanel />
     </section>
   </main>;
 }
