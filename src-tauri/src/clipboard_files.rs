@@ -5,6 +5,15 @@ use tauri::AppHandle;
 
 use crate::ClipboardFile;
 
+// Convert a `file://` URI to a local filesystem path. Handles percent-encoded
+// characters and hostnames correctly.
+fn uri_to_local_path(uri: &str) -> Option<String> {
+  let parsed = url::Url::parse(uri.trim()).ok()?;
+  if parsed.scheme() != "file" { return None; }
+  let path = parsed.to_file_path().ok()?;
+  path.to_str().map(String::from)
+}
+
 pub async fn read_clipboard_files(app: AppHandle) -> Vec<ClipboardFile> {
   let paths = read_paths(app).await;
   match tokio::task::spawn_blocking(move || {
@@ -119,7 +128,11 @@ async fn read_paths(app: AppHandle) -> Vec<String> {
 fn read_paths_platform() -> Vec<String> {
   let Some(display) = gdk::Display::default() else { return Vec::new() };
   let clipboard = gtk::Clipboard::for_display(&display, &gdk::SELECTION_CLIPBOARD);
-  clipboard.wait_for_uris().into_iter().map(|s| s.to_string()).collect()
+  clipboard
+    .wait_for_uris()
+    .into_iter()
+    .filter_map(|u| uri_to_local_path(&u))
+    .collect()
 }
 
 #[cfg(target_os = "macos")]
@@ -129,86 +142,81 @@ fn read_paths_platform() -> Vec<String> {
 
   let pasteboard_class = match AnyClass::get(c"NSPasteboard") { Some(value) => value, None => return Vec::new() };
   let nsstring_class = match AnyClass::get(c"NSString") { Some(value) => value, None => return Vec::new() };
+  let nsurl_class = match AnyClass::get(c"NSURL") { Some(value) => value, None => return Vec::new() };
 
   unsafe {
     let pasteboard: *mut AnyObject = msg_send![pasteboard_class, generalPasteboard];
     if pasteboard.is_null() { return Vec::new(); }
 
-    // Prefer the modern public.file-url (NSURL items).
-    let url_key = b"public.file-url\0";
-    let url_type: *mut AnyObject = msg_send![nsstring_class, stringWithUTF8String: url_key.as_ptr()];
-    let urls: *mut AnyObject = msg_send![pasteboard, propertyListForType: url_type];
-    let mut result = nsurl_array_to_paths(urls);
+    let items: *mut AnyObject = msg_send![pasteboard, pasteboardItems];
+    if items.is_null() { return Vec::new(); }
+    let count: usize = msg_send![items, count];
+    if count == 0 { return Vec::new(); }
 
-    // Fallback to the legacy NSFilenamesPboard (NSString items).
-    if result.is_empty() {
-      let filenames_key = b"NSFilenamesPboard\0";
-      let filenames_type: *mut AnyObject = msg_send![nsstring_class, stringWithUTF8String: filenames_key.as_ptr()];
-      result = nsstring_array_to_paths(msg_send![pasteboard, propertyListForType: filenames_type]);
+    let url_type: *mut AnyObject = msg_send![nsstring_class, stringWithUTF8String: b"public.file-url\0".as_ptr()];
+
+    let mut result: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for index in 0..count {
+      let item: *mut AnyObject = msg_send![items, objectAtIndex: index];
+      if item.is_null() { continue; }
+
+      // Get the URL string for the public.file-url type.
+      let value: *mut AnyObject = if !url_type.is_null() {
+        msg_send![item, stringForType: url_type]
+      } else {
+        std::ptr::null_mut()
+      };
+      if value.is_null() { continue; }
+
+      let utf8: *const i8 = msg_send![value, UTF8String];
+      if utf8.is_null() { continue; }
+      let url_string = std::ffi::CStr::from_ptr(utf8).to_string_lossy().into_owned();
+
+      // Convert the URL string into an NSURL object.
+      let url_str_obj: *mut AnyObject = msg_send![nsstring_class, stringWithUTF8String: utf8];
+      let url: *mut AnyObject = msg_send![nsurl_class, URLWithString: url_str_obj];
+      if url.is_null() { continue; }
+
+      // Scoped file URLs (file:///.file/id=...) on macOS 15+ need explicit
+      // access before `.path` returns the real filesystem path.
+      let _: () = msg_send![url, startAccessingSecurityScopedResource];
+
+      // NSURL.path returns NSString* with the local filesystem path.
+      let path_nsstr: *mut AnyObject = msg_send![url, path];
+      let resolved = if !path_nsstr.is_null() {
+        let p_utf8: *const i8 = msg_send![path_nsstr, UTF8String];
+        if !p_utf8.is_null() {
+          std::ffi::CStr::from_ptr(p_utf8).to_string_lossy().into_owned()
+        } else {
+          String::new()
+        }
+      } else {
+        String::new()
+      };
+
+      let _: () = msg_send![url, stopAccessingSecurityScopedResource];
+
+      if resolved.is_empty() {
+        // Fallback: try the URL's `path` representation via URI conversion.
+        if let Some(path) = uri_to_local_path(&url_string) {
+          if seen.insert(path.clone()) {
+            result.push(path);
+          }
+        }
+        continue;
+      }
+
+      if seen.insert(resolved.clone()) {
+        result.push(resolved);
+      }
     }
     result
   }
 }
 
-#[cfg(target_os = "macos")]
-unsafe fn nsstring_array_to_paths(array: *mut objc2::runtime::AnyObject) -> Vec<String> {
-  use objc2::msg_send;
-  use objc2::runtime::AnyObject;
-  if array.is_null() { return Vec::new(); }
-  let count: usize = msg_send![array, count];
-  let mut result = Vec::with_capacity(count);
-  for index in 0..count {
-    let item: *mut AnyObject = msg_send![array, objectAtIndex: index];
-    if item.is_null() { continue; }
-    let utf8: *const i8 = msg_send![item, UTF8String];
-    if !utf8.is_null() {
-      let s = std::ffi::CStr::from_ptr(utf8).to_string_lossy().into_owned();
-      if !s.is_empty() { result.push(s); }
-    }
-  }
-  result
-}
-
-#[cfg(target_os = "macos")]
-unsafe fn nsurl_array_to_paths(array: *mut objc2::runtime::AnyObject) -> Vec<String> {
-  use objc2::msg_send;
-  use objc2::runtime::AnyObject;
-  if array.is_null() { return Vec::new(); }
-  let count: usize = msg_send![array, count];
-  let mut result = Vec::with_capacity(count);
-  for index in 0..count {
-    let item: *mut AnyObject = msg_send![array, objectAtIndex: index];
-    if item.is_null() { continue; }
-    // NSURL.path returns NSString*. Use UTF8String to get a C string.
-    let path_nsstr: *mut AnyObject = msg_send![item, path];
-    if path_nsstr.is_null() { continue; }
-    let utf8: *const i8 = msg_send![path_nsstr, UTF8String];
-    if utf8.is_null() { continue; }
-    let s = std::ffi::CStr::from_ptr(utf8).to_string_lossy().into_owned();
-    if !s.is_empty() { result.push(s); }
-  }
-  result
-}
-
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn read_paths_platform() -> Vec<String> {
   Vec::new()
-}
-
-#[cfg(target_os = "macos")]
-unsafe fn ns_array_to_string_vec(array: *mut objc2::runtime::AnyObject) -> Vec<String> {
-  use objc2::msg_send;
-  use objc2::runtime::AnyObject;
-  if array.is_null() { return Vec::new(); }
-  let count: usize = msg_send![array, count];
-  let mut result = Vec::with_capacity(count);
-  for index in 0..count {
-    let item: *mut AnyObject = msg_send![array, objectAtIndex: index];
-    if item.is_null() { continue; }
-    let utf8: *const i8 = msg_send![item, UTF8String];
-    if utf8.is_null() { continue; }
-    let s = std::ffi::CStr::from_ptr(utf8).to_string_lossy().into_owned();
-    if !s.is_empty() { result.push(s); }
-  }
-  result
 }
