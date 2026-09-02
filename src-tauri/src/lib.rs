@@ -79,6 +79,8 @@ fn status(app: &AppHandle, state: &'static str, detail: impl Into<String>) {
 fn clipboard_update(app: &AppHandle, text: String) {
   let _ = app.emit("clipboard-update", ClipboardUpdate { text });
 }
+fn text_sent(app: &AppHandle, text: String) { let _ = app.emit("text-sent", ClipboardUpdate { text }); }
+fn text_received(app: &AppHandle, text: String) { let _ = app.emit("text-received", ClipboardUpdate { text }); }
 fn clipboard_files_changed(app: &AppHandle, files: Vec<ClipboardFile>) {
   let _ = app.emit("clipboard-files", ClipboardFilesEvent { files });
 }
@@ -273,7 +275,7 @@ async fn sync_loop(app: AppHandle, request: ConnectRequest, mut stop: oneshot::R
                 Ok(value) => writer.send(tokio_tungstenite::tungstenite::Message::Text(value.into())).await.is_ok(),
                 Err(_) => false,
               };
-              if sent { last_seen = Some(text.clone()); clipboard_update(&app, text); status(&app, "sent", "Texto enviado al otro dispositivo"); } else { status(&app, "error", "Se perdió la conexión con el relay"); return; }
+              if sent { last_seen = Some(text.clone()); clipboard_update(&app, text.clone()); text_sent(&app, text); status(&app, "sent", "Texto enviado al otro dispositivo"); } else { status(&app, "error", "Se perdió la conexión con el relay"); return; }
             }
           }
         }
@@ -300,7 +302,7 @@ async fn sync_loop(app: AppHandle, request: ConnectRequest, mut stop: oneshot::R
           if packet.kind == "join" && packet.room == request.room && packet.sender_id != request.client_id {
             peer_features.insert(packet.sender_id.clone(), (packet.room.clone(), packet.features.clone()));
           } else if packet.kind == "clipboard" && packet.room == request.room && packet.sender_id != request.client_id {
-            if clipboard_write(&app, packet.text.clone()).await.is_ok() { last_seen = Some(packet.text.clone()); clipboard_update(&app, packet.text); status(&app, "received", "Texto recibido y escrito en el portapapeles"); }
+            if clipboard_write(&app, packet.text.clone()).await.is_ok() { last_seen = Some(packet.text.clone()); clipboard_update(&app, packet.text.clone()); text_received(&app, packet.text); status(&app, "received", "Texto recibido y escrito en el portapapeles"); }
           } else if packet.kind == "file_start" && packet.room == request.room && packet.sender_id != request.client_id {
             handle_file_start(&app, &packet.text);
           } else if packet.kind == "file_done" && packet.room == request.room && packet.sender_id != request.client_id {
