@@ -31,15 +31,11 @@ fn write_uris(body: &str) -> bool {
   use objc2::runtime::{AnyClass, AnyObject};
 
   let pasteboard_class = match AnyClass::get(c"NSPasteboard") { Some(value) => value, None => return false };
-  let nsstring_class = match AnyClass::get(c"NSString") { Some(value) => value, None => return false };
 
   unsafe {
     let pasteboard: *mut AnyObject = msg_send![pasteboard_class, generalPasteboard];
     if pasteboard.is_null() { return false; }
     let _: () = msg_send![pasteboard, clearContents];
-
-    let urls_type_key = b"public.file-url\0";
-    let urls_type: *mut AnyObject = msg_send![nsstring_class, stringWithUTF8String: urls_type_key.as_ptr()];
 
     let lines: Vec<&str> = body.lines().collect();
     let count = lines.len();
@@ -53,7 +49,10 @@ fn write_uris(body: &str) -> bool {
       }
     }
 
-    let _: bool = msg_send![pasteboard, setPropertyList: nsarray, forType: urls_type];
+    // writeObjects: registers each NSURL as a `public.file-url`
+    // representation on the pasteboard. setPropertyList:forType: would
+    // reject NSURL objects because they aren't property-list types.
+    let _: bool = msg_send![pasteboard, writeObjects: nsarray];
     true
   }
 }
