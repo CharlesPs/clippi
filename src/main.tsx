@@ -181,6 +181,7 @@ function App() {
     <footer className={`activity activity-${activityKind}`} role="status" aria-live="polite">
       <span className="activity-dot" />
       <span className="activity-text">{activity}</span>
+      <span className="activity-traffic">{connected ? (role === "server" ? "RELAY" : "LAN") : "IDLE"}</span>
     </footer>
   </main>;
 }

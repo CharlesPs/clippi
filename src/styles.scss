@@ -1,6 +1,6 @@
 :root { font-family: Inter, ui-sans-serif, system-ui, sans-serif; color: #e9eef8; background: #0b1020; }
 * { box-sizing: border-box; } body { margin: 0; min-width: 320px; }
-main { min-height: 100vh; display: grid; place-items: center; padding: 16px 16px 80px; background: radial-gradient(circle at 20% 0%, #1b325b, #0b1020 55%); }
+main { min-height: 100vh; display: grid; place-items: center; padding: 16px 16px 36px; background: radial-gradient(circle at 20% 0%, #1b325b, #0b1020 55%); }
 .card { width: min(100%, 540px); background: #121a2d; border: 1px solid #283755; border-radius: 18px; padding: 24px 28px 28px; box-shadow: 0 18px 55px #0006; display: grid; gap: 18px; }
 .card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
 .card-titles { display: grid; gap: 2px; }
@@ -40,27 +40,28 @@ button.secondary:hover:not(:disabled) { background: #304463; }
 button.selected { background: linear-gradient(135deg, #5689f7, #7a5cf0); box-shadow: 0 6px 18px -8px #5689f7; }
 .activity {
   position: fixed;
-  left: 50%;
-  bottom: 16px;
-  transform: translateX(-50%);
-  width: min(100%, 540px);
+  left: 0;
+  right: 0;
+  bottom: 0;
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 16px;
-  background: #0e1a33f2;
-  border: 1px solid #2b3c66;
-  border-radius: 999px;
+  padding: 6px 18px;
+  background: rgba(11, 16, 32, 0.82);
+  border-top: 1px solid #283755;
+  border-radius: 0;
   font-size: 12px;
   color: #cdd9ef;
   font-weight: 500;
   word-break: break-word;
-  backdrop-filter: blur(8px);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   z-index: 100;
-  box-shadow: 0 12px 28px -8px #000a, inset 0 1px 0 #2c3e6a4d;
+  box-shadow: 0 -1px 0 #ffffff0a inset, 0 -8px 18px -10px #0009;
 }
 .activity-dot { width: 8px; height: 8px; border-radius: 50%; background: #5689f7; flex-shrink: 0; box-shadow: 0 0 0 3px #5689f740; }
 .activity-text { flex: 1; min-width: 0; }
+.activity-traffic { display: inline-flex; align-items: center; gap: 4px; color: #6f80a0; font-size: 10px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; padding: 2px 8px; border: 1px solid #283755; border-radius: 4px; background: #0a102080; }
 .activity-info { color: #cdd9ef; }
 .activity-info .activity-dot { background: #5689f7; box-shadow: 0 0 0 3px #5689f740; }
 .activity-success { color: #cdfae3; }
