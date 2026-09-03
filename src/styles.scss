@@ -141,3 +141,9 @@ button.selected { background: linear-gradient(135deg, #5689f7, #7a5cf0); box-sha
 .history-path { color: #8ba8db; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
 .history-failed { border-color: #5a2940; background: #2a1320; }
 .history-failed .history-content { color: #f1a7b3; }
+
+.context-menu { position: fixed; z-index: 200; min-width: 180px; padding: 4px; background: #14213d; border: 1px solid #2b3c66; border-radius: 10px; box-shadow: 0 12px 32px -12px #000c, 0 0 0 1px #00000040; display: grid; gap: 2px; }
+.context-menu-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; background: transparent; border: 0; border-radius: 6px; color: #e9eef8; font: inherit; font-size: 13px; font-weight: 600; text-align: left; cursor: pointer; transition: background .12s ease; }
+.context-menu-item:hover { background: #1c2c52; }
+.context-menu-icon { font-size: 14px; line-height: 1; }
+.received-toast { position: fixed; left: 50%; bottom: 56px; transform: translateX(-50%); padding: 8px 14px; border-radius: 999px; background: #14213d; border: 1px solid #2b3c66; color: #cdd9ef; font-size: 12px; font-weight: 600; box-shadow: 0 8px 24px -10px #000a; z-index: 150; pointer-events: none; }

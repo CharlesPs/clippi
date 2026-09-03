@@ -191,6 +191,37 @@ fn current_download_dir() -> Result<String, String> {
   Ok(default_download_dir().to_string_lossy().into_owned())
 }
 
+#[tauri::command]
+async fn paste_received_file(path: String, app: AppHandle) -> Result<(), String> {
+  let trimmed = path.trim();
+  if trimmed.is_empty() { return Err("Ruta vacía".into()); }
+  let names = vec![trimmed.to_string()];
+  let wrote = {
+    use std::sync::mpsc;
+    let (tx, rx) = mpsc::sync_channel::<bool>(1);
+    let names_for_main = names.clone();
+    let dispatched = app.run_on_main_thread(move || {
+      let _ = tx.send(clipboard_writer::write_clipboard_uris(&names_for_main));
+    });
+    if dispatched.is_err() { return Err("No se pudo escribir en el portapapeles".into()); }
+    match tokio::task::spawn_blocking(move || {
+      rx.recv_timeout(std::time::Duration::from_millis(1500)).unwrap_or(false)
+    }).await {
+      Ok(value) => value,
+      Err(_) => false,
+    }
+  };
+  if wrote {
+    let state: State<SelfWrittenClipboard> = app.state();
+    if let Ok(mut recent) = state.0.lock() {
+      recent.insert(trimmed.to_string(), std::time::Instant::now());
+    };
+    Ok(())
+  } else {
+    Err("No se pudo publicar el archivo en el portapapeles".into())
+  }
+}
+
 async fn clipboard_read(app: &AppHandle) -> Result<String, String> {
   use std::sync::mpsc;
   let (tx, rx) = mpsc::sync_channel::<Result<String, String>>(1);
@@ -597,7 +628,7 @@ pub fn run() {
     .manage(SendCancel(Mutex::new(false)))
     .manage(SelfWrittenClipboard(Mutex::new(HashMap::new())))
     .manage(ReceiveState(Mutex::new(HashMap::new())))
-    .invoke_handler(tauri::generate_handler![connect, start_relay, disconnect, send_files, cancel_file, current_download_dir])
+    .invoke_handler(tauri::generate_handler![connect, start_relay, disconnect, send_files, cancel_file, current_download_dir, paste_received_file])
     .on_window_event(|window, event| {
       if let WindowEvent::CloseRequested { api, .. } = event {
         window.hide().ok();
