@@ -89,10 +89,10 @@ fn file_sent(app: &AppHandle, payload: FileFinalized) { let _ = app.emit("file-s
 fn file_failed(app: &AppHandle, payload: FileFailed) { let _ = app.emit("file-failed", payload); }
 
 fn default_download_dir() -> PathBuf {
-  let base = dirs::data_dir()
+  let base = dirs::desktop_dir()
     .or_else(dirs::home_dir)
     .unwrap_or_else(|| PathBuf::from("."));
-  base.join("clippi").join("received")
+  base.join(".clippi").join("received")
 }
 
 fn sanitize_filename(name: &str) -> String {
