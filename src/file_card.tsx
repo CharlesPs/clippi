@@ -13,7 +13,8 @@ function formatSize(bytes: number): string {
   return `${formatted} ${units[power]}`;
 }
 
-function iconFor(mime: string, name: string): { symbol: string; tint: string } {
+function iconFor(mime: string, name: string, isLink: boolean): { symbol: string; tint: string } {
+  if (isLink) return { symbol: "🔗", tint: "tint-sky" };
   if (mime.startsWith("image/")) return { symbol: "🖼", tint: "tint-violet" };
   if (mime.startsWith("video/")) return { symbol: "🎬", tint: "tint-rose" };
   if (mime.startsWith("audio/")) return { symbol: "🎵", tint: "tint-amber" };
@@ -25,6 +26,10 @@ function iconFor(mime: string, name: string): { symbol: string; tint: string } {
   return { symbol: "📎", tint: "tint-sky" };
 }
 
+function isHttp(path: string): boolean {
+  return path.startsWith("http://") || path.startsWith("https://");
+}
+
 export function FileCard({ files }: FileCardProps) {
   if (files.length === 0) return null;
   return <section className="file-card" aria-live="polite">
@@ -33,11 +38,12 @@ export function FileCard({ files }: FileCardProps) {
         <span className="file-card-eyebrow">Portapapeles</span>
         <h3>{files.length === 1 ? "1 archivo" : `${files.length} archivos`}</h3>
       </div>
-      <span className="file-card-hint">Ctrl+V en el otro equipo para pegar</span>
+      <span className="file-card-hint">Ctrl+V donde quieras para pegar</span>
     </div>
     <ul className="file-card-list">
       {files.map((file, index) => {
-        const { symbol, tint } = iconFor(file.mime, file.name);
+        const { symbol, tint } = iconFor(file.mime, file.name, isHttp(file.path));
+        const pathClass = isHttp(file.path) ? "file-card-path file-card-path-link" : "file-card-path";
         return <li key={`${file.path}-${index}`} className="file-card-item">
           <div className={`file-card-icon ${tint}`}><span>{symbol}</span></div>
           <div className="file-card-info">
@@ -45,7 +51,7 @@ export function FileCard({ files }: FileCardProps) {
             <div className="file-card-meta">
               <span className="file-card-size">{formatSize(file.size)}</span>
               <span className="file-card-divider" />
-              <code className="file-card-path" title={file.path}>{file.path}</code>
+              <code className={pathClass} title={file.path}>{file.path}</code>
             </div>
           </div>
         </li>;

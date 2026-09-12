@@ -34,10 +34,9 @@ wss.on("connection", (socket) => {
       return;
     }
     if (message.type === "file_start" || message.type === "file_done" || message.type === "file_cancel") {
-      const outbound = JSON.stringify(message);
-      for (const peer of wss.clients) {
-        if (peer !== socket && peer.room === message.room && peer.readyState === WebSocket.OPEN) peer.send(outbound);
-      }
+      // Legacy envelope kinds from the old binary chunk transfer flow.
+      // The new lazy-pull flow doesn't use them; ignore if received.
+      return;
     }
   });
 });

@@ -25,6 +25,11 @@ pub async fn read_clipboard_files(app: AppHandle) -> Vec<ClipboardFile> {
 }
 
 fn enrich(path: String) -> ClipboardFile {
+  if path.starts_with("http://") || path.starts_with("https://") {
+    let (name, size) = parse_http_query(&path);
+    let mime = guess_mime(&name);
+    return ClipboardFile { path, name, size, mime };
+  }
   let name = Path::new(&path)
     .file_name()
     .and_then(|s| s.to_str())
@@ -33,6 +38,18 @@ fn enrich(path: String) -> ClipboardFile {
   let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
   let mime = guess_mime(&path);
   ClipboardFile { path, name, size, mime }
+}
+
+fn parse_http_query(url: &str) -> (String, u64) {
+  let parsed = url::Url::parse(url);
+  let (mut name, mut size) = (String::new(), 0u64);
+  if let Ok(parsed) = parsed {
+    for (k, v) in parsed.query_pairs() {
+      if k == "n" { name = v.into_owned(); }
+      else if k == "s" { if let Ok(n) = v.parse::<u64>() { size = n; } }
+    }
+  }
+  (name, size)
 }
 
 fn guess_mime(path: &str) -> String {

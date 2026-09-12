@@ -3,31 +3,18 @@ import { createRoot } from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { TextPanel } from "./texts";
-import { ReceivedPanel } from "./received";
 import { FileCard, ClipboardFile } from "./file_card";
 import { Tabs } from "./tabs";
-import { HistoryPanel, HistoryEntry } from "./history";
 import "./styles.scss";
 
 type Event = { state: "connected" | "disconnected" | "server_started" | "sent" | "received" | "error"; detail: string };
 type ClipboardUpdate = { text: string };
 type ClipboardFilesEvent = { files: ClipboardFile[] };
-type FileReceived = { id: string; name: string; path: string };
-type FileFinalized = { id: string; name: string; direction: "send" | "recv" };
-type ClipboardMode = "none" | "text" | "files";
-type TabId = "connection" | "clipboard" | "history";
-type ActivityKind = "info" | "success" | "warning" | "error";
+type ShareFailed = { name: string | null; error: string };
+type ClipboardKind = "none" | "text" | "files";
+type TabId = "connection" | "clipboard";
 
 const defaultEndpoint = "ws://127.0.0.1:8787";
-
-function entryId() { return crypto.randomUUID(); }
-
-function kindForState(state: Event["state"]): ActivityKind {
-  if (state === "connected" || state === "server_started") return "success";
-  if (state === "disconnected") return "warning";
-  if (state === "error") return "error";
-  return "info";
-}
 
 function App() {
   const [tab, setTab] = useState<TabId>("connection");
@@ -37,11 +24,10 @@ function App() {
   const [port, setPort] = useState(localStorage.getItem("relayPort") ?? "8787");
   const [connected, setConnected] = useState(false);
   const [activity, setActivity] = useState("Sin conexión");
-  const [activityKind, setActivityKind] = useState<ActivityKind>("info");
-  const [clipboardMode, setClipboardMode] = useState<ClipboardMode>("none");
+  const [activityKind, setActivityKind] = useState<"info" | "success" | "warning" | "error">("info");
+  const [clipboardMode, setClipboardMode] = useState<ClipboardKind>("none");
   const [clipboardText, setClipboardText] = useState("");
   const [clipboardFiles, setClipboardFiles] = useState<ClipboardFile[]>([]);
-  const [history, setHistory] = useState<HistoryEntry[]>([]);
   const clientId = useMemo(() => {
     const old = localStorage.getItem("clientId");
     if (old) return old;
@@ -57,13 +43,12 @@ function App() {
       if (payload.state === "connected" || payload.state === "server_started") {
         setConnected(true);
         setTab("clipboard");
-      } else if (payload.state === "disconnected" || payload.state === "error") {
+      } else {
         setConnected(false);
         setTab("connection");
         setClipboardMode("none");
         setClipboardText("");
         setClipboardFiles([]);
-        setHistory([]);
       }
     });
     const unlistenText = listen<ClipboardUpdate>("clipboard-update", ({ payload }) => {
@@ -78,29 +63,14 @@ function App() {
       setClipboardMode(payload.files.length > 0 ? "files" : "none");
       setTab("clipboard");
     });
-    const unlistenTextSent = listen<ClipboardUpdate>("text-sent", ({ payload }) => {
+    const unlistenShareFailed = listen<ShareFailed>("share-failed", ({ payload }) => {
       if (!active) return;
-      const entry: HistoryEntry = { id: entryId(), direction: "out", timestamp: Date.now(), text: payload.text };
-      setHistory((es) => [entry, ...es].slice(0, 200));
-    });
-    const unlistenTextReceived = listen<ClipboardUpdate>("text-received", ({ payload }) => {
-      if (!active) return;
-      const entry: HistoryEntry = { id: entryId(), direction: "in", timestamp: Date.now(), text: payload.text };
-      setHistory((es) => [entry, ...es].slice(0, 200));
-    });
-    const unlistenFileSent = listen<FileFinalized>("file-sent", ({ payload }) => {
-      if (!active) return;
-      const entry: HistoryEntry = { id: entryId(), direction: "out", timestamp: Date.now(), names: [payload.name] };
-      setHistory((es) => [entry, ...es].slice(0, 200));
-    });
-    const unlistenFileReceived = listen<FileReceived>("file-received", ({ payload }) => {
-      if (!active) return;
-      const entry: HistoryEntry = { id: entryId(), direction: "in", timestamp: Date.now(), name: payload.name, path: payload.path };
-      setHistory((es) => [entry, ...es].slice(0, 200));
+      setActivity(format_share_error(payload));
+      setActivityKind("error");
     });
     return () => {
       active = false;
-      void Promise.all([unlistenStatus, unlistenText, unlistenFiles, unlistenTextSent, unlistenTextReceived, unlistenFileSent, unlistenFileReceived]).then((listeners) => listeners.forEach((fn) => fn()));
+      void Promise.all([unlistenStatus, unlistenText, unlistenFiles, unlistenShareFailed]).then((listeners) => listeners.forEach((fn) => fn()));
     };
   }, []);
 
@@ -166,23 +136,28 @@ function App() {
               {portapapelesContent}
             </section>,
           },
-          {
-            value: "history",
-            label: "Historial",
-            badge: history.length > 0 ? history.length : undefined,
-            content: <section className="panel panel-history">
-              <div className="panel-section"><ReceivedPanel /></div>
-              <div className="panel-section"><HistoryPanel entries={history} onClear={() => setHistory([])} /></div>
-            </section>,
-          },
         ]}
       />
     </section>
     <footer className={`activity activity-${activityKind}`} role="status" aria-live="polite">
       <span className="activity-dot" />
       <span className="activity-text">{activity}</span>
-      <span className="activity-traffic">{connected ? (role === "server" ? "RELAY" : "LAN") : "IDLE"}</span>
     </footer>
   </main>;
 }
+
+function kindForState(state: Event["state"]): "info" | "success" | "warning" | "error" {
+  if (state === "connected" || state === "server_started") return "success";
+  if (state === "disconnected") return "warning";
+  if (state === "error") return "error";
+  return "info";
+}
+
+function format_share_error(payload: ShareFailed): string {
+  if (payload.name) {
+    return `No se pudo compartir ${payload.name}: ${payload.error}`;
+  }
+  return `No se pudo compartir: ${payload.error}`;
+}
+
 createRoot(document.getElementById("root")!).render(<React.StrictMode><App /></React.StrictMode>);
