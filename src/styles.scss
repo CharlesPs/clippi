@@ -9,7 +9,19 @@ h1 { margin: 0; font-size: 26px; letter-spacing: -.01em; }
 .status-pill { display: inline-flex; align-items: center; gap: 7px; padding: 6px 12px; border-radius: 999px; font-size: 12px; font-weight: 700; border: 1px solid #2b3c66; background: #14213d; color: #aab7cc; white-space: nowrap; }
 .status-pill .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #aab7cc; box-shadow: 0 0 0 3px #28375580; }
 .status-pill.online { color: #57d39b; border-color: #2d5e4a; background: #14291f; }
-.status-pill.online .status-dot { background: #57d39b; box-shadow: 0 0 0 3px #2d5e4a80; }
+.status-pill.online .status-dot { background: #57d39b; box-shadow: 0 0 0 3px #2d5e4a80; animation: status-pulse 2s ease-out infinite; }
+@keyframes status-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(87, 211, 155, 0.6); }
+  70% { box-shadow: 0 0 0 10px rgba(87, 211, 155, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(87, 211, 155, 0); }
+}
+
+.server-info { display: grid; gap: 10px; padding: 14px; border-radius: 12px; background: #0a1426aa; border: 1px solid #2b3c66; }
+.server-info-title { margin: 0; color: #b6c3d8; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; }
+.server-info-grid { display: grid; gap: 6px; }
+.server-info-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px; background: #0d1830; border-radius: 8px; border: 1px solid #283b66; }
+.server-info-key { color: #8ba8db; font-size: 12px; font-weight: 600; }
+.server-info-value { color: #cdfae3; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 
 .tabs { display: grid; gap: 16px; }
 .tab-bar { display: flex; gap: 4px; padding: 4px; background: #0a1426aa; border: 1px solid #2b3c66; border-radius: 12px; }

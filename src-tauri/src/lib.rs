@@ -128,6 +128,15 @@ async fn clipboard_read(app: &AppHandle) -> Result<String, String> {
 async fn sync_loop(app: AppHandle, request: ConnectRequest, mut stop: oneshot::Receiver<()>) {
   let (stream, _) = match tokio_tungstenite::connect_async(request.endpoint.as_str()).await { Ok(value) => value, Err(error) => { status(&app, "error", format!("No se pudo conectar: {error}")); return; } };
   status(&app, "connected", format!("Conectado a {}", request.endpoint));
+  if let Ok(ip) = local_ip_address::local_ip() {
+    let file_port: u16 = app.state::<SharedFileServerPort>().0.lock().ok().and_then(|g| *g).unwrap_or(0);
+    let _ = app.emit("sync-info", serde_json::json!({
+      "ip": ip.to_string(),
+      "relayPort": if let Ok(url) = url::Url::parse(&request.endpoint) { url.port().unwrap_or(0) } else { 0 },
+      "fileServerPort": file_port,
+      "role": if request.endpoint.contains("127.0.0.1") { "server" } else { "client" }
+    }));
+  }
   let (mut writer, mut reader) = stream.split();
   let join = Envelope { kind: "join".into(), room: request.room.clone(), sender_id: request.client_id.clone(), text: String::new() };
   if let Ok(value) = serde_json::to_string(&join) { let _ = writer.send(tokio_tungstenite::tungstenite::Message::Text(value.into())).await; }
@@ -159,7 +168,6 @@ async fn sync_loop(app: AppHandle, request: ConnectRequest, mut stop: oneshot::R
             if sent {
               last_seen = Some(text.clone());
               clipboard_update(&app, text);
-              status(&app, "sent", "Texto enviado al otro dispositivo");
             } else {
               status(&app, "error", "Se perdió la conexión con el relay");
               return;

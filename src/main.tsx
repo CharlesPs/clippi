@@ -11,8 +11,9 @@ type Event = { state: "connected" | "disconnected" | "server_started" | "sent" |
 type ClipboardUpdate = { text: string };
 type ClipboardFilesEvent = { files: ClipboardFile[] };
 type ShareFailed = { name: string | null; error: string };
+type SyncInfo = { ip: string; relayPort: number; fileServerPort: number; role: "server" | "client" };
 type ClipboardKind = "none" | "text" | "files";
-type TabId = "connection" | "clipboard";
+type TabId = "connection" | "clipboard" | "history";
 
 const defaultEndpoint = "ws://127.0.0.1:8787";
 
@@ -28,6 +29,7 @@ function App() {
   const [clipboardMode, setClipboardMode] = useState<ClipboardKind>("none");
   const [clipboardText, setClipboardText] = useState("");
   const [clipboardFiles, setClipboardFiles] = useState<ClipboardFile[]>([]);
+  const [syncInfo, setSyncInfo] = useState<SyncInfo | null>(null);
   const clientId = useMemo(() => {
     const old = localStorage.getItem("clientId");
     if (old) return old;
@@ -49,6 +51,7 @@ function App() {
         setClipboardMode("none");
         setClipboardText("");
         setClipboardFiles([]);
+        setSyncInfo(null);
       }
     });
     const unlistenText = listen<ClipboardUpdate>("clipboard-update", ({ payload }) => {
@@ -68,9 +71,13 @@ function App() {
       setActivity(format_share_error(payload));
       setActivityKind("error");
     });
+    const unlistenSyncInfo = listen<SyncInfo>("sync-info", ({ payload }) => {
+      if (!active) return;
+      setSyncInfo(payload);
+    });
     return () => {
       active = false;
-      void Promise.all([unlistenStatus, unlistenText, unlistenFiles, unlistenShareFailed]).then((listeners) => listeners.forEach((fn) => fn()));
+      void Promise.all([unlistenStatus, unlistenText, unlistenFiles, unlistenShareFailed, unlistenSyncInfo]).then((listeners) => listeners.forEach((fn) => fn()));
     };
   }, []);
 
@@ -125,6 +132,14 @@ function App() {
                 <p className="hint">Este equipo también sincroniza su portapapeles. En los clientes usa <code>ws://IP-DE-ESTE-EQUIPO:{port}</code> y la misma sala.</p>
                 <div className="actions"><button type="button" onClick={() => void startRelay()} disabled={connected}>Iniciar relay</button><button type="button" className="secondary" onClick={() => void disconnect()} disabled={!connected}>Detener</button></div>
               </>}
+              {syncInfo && <section className="server-info">
+                <p className="server-info-title">{syncInfo.role === "server" ? "Información del relay" : "Información del cliente"}</p>
+                <div className="server-info-grid">
+                  <div className="server-info-row"><span className="server-info-key">IP local</span><code className="server-info-value">{syncInfo.ip}</code></div>
+                  <div className="server-info-row"><span className="server-info-key">Puerto relay</span><code className="server-info-value">{syncInfo.relayPort}</code></div>
+                  <div className="server-info-row"><span className="server-info-key">Servidor de archivos</span><code className="server-info-value">puerto {syncInfo.fileServerPort}</code></div>
+                </div>
+              </section>}
             </section>,
           },
           {
