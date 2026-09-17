@@ -24,7 +24,7 @@ struct SyncState(Mutex<Vec<oneshot::Sender<()>>>);
 #[serde(rename_all = "camelCase")]
 struct ConnectRequest { endpoint: String, room: String, client_id: String }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct RelayRequest { port: u16, room: String, client_id: String }
 
@@ -126,8 +126,10 @@ async fn clipboard_read(app: &AppHandle) -> Result<String, String> {
 }
 
 async fn sync_loop(app: AppHandle, request: ConnectRequest, mut stop: oneshot::Receiver<()>) {
-  let (stream, _) = match tokio_tungstenite::connect_async(request.endpoint.as_str()).await { Ok(value) => value, Err(error) => { status(&app, "error", format!("No se pudo conectar: {error}")); return; } };
+  eprintln!("[sync_loop] entering");
+  let (stream, _) = match tokio_tungstenite::connect_async(request.endpoint.as_str()).await { Ok(value) => value, Err(error) => { eprintln!("[sync_loop] connect_async failed: {error}"); status(&app, "error", format!("No se pudo conectar: {error}")); return; } };
   status(&app, "connected", format!("Conectado a {}", request.endpoint));
+  eprintln!("[sync_loop] connected");
   if let Ok(ip) = local_ip_address::local_ip() {
     let file_port: u16 = app.state::<SharedFileServerPort>().0.lock().ok().and_then(|g| *g).unwrap_or(0);
     let _ = app.emit("sync-info", serde_json::json!({
@@ -136,6 +138,9 @@ async fn sync_loop(app: AppHandle, request: ConnectRequest, mut stop: oneshot::R
       "fileServerPort": file_port,
       "role": if request.endpoint.contains("127.0.0.1") { "server" } else { "client" }
     }));
+    eprintln!("[sync_loop] emitted sync-info: ip={ip}, relayPort={}, fileServerPort={}", if let Ok(url) = url::Url::parse(&request.endpoint) { url.port().unwrap_or(0) } else { 0 }, file_port);
+  } else {
+    eprintln!("[sync_loop] local_ip_address failed");
   }
   let (mut writer, mut reader) = stream.split();
   let join = Envelope { kind: "join".into(), room: request.room.clone(), sender_id: request.client_id.clone(), text: String::new() };
@@ -188,8 +193,8 @@ async fn sync_loop(app: AppHandle, request: ConnectRequest, mut stop: oneshot::R
           }
         },
         Some(Ok(_)) => {},
-        Some(Err(error)) => { status(&app, "error", format!("Conexión cerrada: {error}")); return; },
-        None => { status(&app, "disconnected", "El relay cerró la conexión"); return; }
+        Some(Err(error)) => { eprintln!("[sync_loop] reader error: {error}"); status(&app, "error", format!("Conexión cerrada: {error}")); return; }, 
+        None => { eprintln!("[sync_loop] reader returned None (WS closed)"); status(&app, "disconnected", "El relay cerró la conexión"); return; }
       }
     }
   }
@@ -309,17 +314,25 @@ fn start_relay(request: RelayRequest, app: AppHandle, sync: State<SyncState>) ->
   for stop in sync.0.lock().map_err(|_| "Estado bloqueado")?.drain(..) { let _ = stop.send(()); }
   let (relay_stop_tx, relay_stop_rx) = oneshot::channel();
   let (client_stop_tx, client_stop_rx) = oneshot::channel();
-  { let mut stops = sync.0.lock().map_err(|_| "Estado bloqueado")?; stops.push(relay_stop_tx); stops.push(client_stop_tx); }
+  let (shutdown_tx, shutdown_rx) = oneshot::channel();
+  { let mut stops = sync.0.lock().map_err(|_| "Estado bloqueado")?; stops.push(relay_stop_tx); stops.push(client_stop_tx); stops.push(shutdown_tx); }
+  let app_clone = app.clone();
+  let request_clone = request.clone();
   std::thread::spawn(move || {
     let runtime = tokio::runtime::Runtime::new().expect("No se pudo crear el runtime");
     runtime.block_on(async move {
-      let relay_app = app.clone();
-      let relay = relay_loop(relay_app, request.port, relay_stop_rx);
-      let client = async {
+      // Spawn relay_loop as an independent task. It runs until its own stop signal fires.
+      let _relay_task = tokio::spawn(relay_loop(app_clone.clone(), request_clone.port, relay_stop_rx));
+      // Spawn sync_loop as another independent task. It runs until its stop signal fires.
+      let endpoint = format!("ws://127.0.0.1:{}", request_clone.port);
+      let client_id = request_clone.client_id.clone();
+      let room = request_clone.room.clone();
+      let _client_task = tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-        sync_loop(app, ConnectRequest { endpoint: format!("ws://127.0.0.1:{}", request.port), room: request.room, client_id: request.client_id }, client_stop_rx).await;
-      };
-      tokio::join!(relay, client);
+        sync_loop(app_clone.clone(), ConnectRequest { endpoint, room, client_id }, client_stop_rx).await;
+      });
+      // Wait for user to click Detener (fires shutdown_rx). The runtime stays alive because the spawned tasks hold it.
+      let _ = shutdown_rx.await;
     });
   });
   Ok(())

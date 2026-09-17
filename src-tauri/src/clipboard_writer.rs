@@ -181,9 +181,11 @@ fn write_url(url: &str) -> bool {
     let url_obj: *mut AnyObject = msg_send![class!(NSURL), URLWithString: nsurl_string.as_ptr()];
     if url_obj.is_null() { return false; }
     let objects: *mut AnyObject = msg_send![class!(NSArray), arrayWithObject: url_obj];
-    let url_type_key = b"public.file-url\0";
-    let url_type: *mut AnyObject = msg_send![nsstring_class, stringWithUTF8String: url_type_key.as_ptr()];
-    let _: bool = msg_send![pasteboard, setPropertyList: objects forType: url_type];
+    // writeObjects: registers each NSPasteboardWriting as the appropriate type.
+    // NSURL registers as public.file-url. This is the proper API; setPropertyList:
+    // only accepts property-list types (NSString/NSNumber/NSData) and silently drops
+    // NSURL on release builds (and asserts on debug builds of macOS).
+    let _: bool = msg_send![pasteboard, writeObjects: objects];
 
     let text_obj: *mut AnyObject = msg_send![nsstring_class, stringWithUTF8String: nsurl_string.as_ptr()];
     let text_type_key = b"public.utf8-plain-text\0";
